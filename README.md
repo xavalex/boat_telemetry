@@ -1,3 +1,4 @@
+<img width="513" height="440" alt="sbms_telegram" src="https://github.com/user-attachments/assets/c6c81e71-9752-44a9-afeb-3d2b24f7b0fd" />
 I have set up a Raspberry Pi Zero W (about $45 on Amazon) with a Python script that is triggered by crontab every 15 minutes, collects data from the SBMS, then send it to a Telegram Bot I follow on my phone. It also collects data from a Victron SmartSolar mppt but that is not relevant here. See a copy of Telegram screen below.
 
 The scipt is simple and can be found at https://github.com/xavalex/boat_telemetry. I used the /edata folder supplied by the SBMS web server. Thanks Dacian!
