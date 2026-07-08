@@ -3,16 +3,22 @@ import re
 import sys
 import requests
 import json
-import config
+import tinytuya
+
 from victron_ble.exceptions import AdvertisementKeyMissingError
 from victron_ble.scanner import Scanner
 
 # --- MASTER CONFIGURATION ---
-BOT_TOKEN = config.BOT_TOKEN
-CHAT_ID = config.CHAT_ID
-SBMS_IP = config.SBMS_IP
-DEVICE_MAC = config.DEVICE_MAC
-ENCRYPTION_KEY = config.ENCRYPTION_KEY
+BOT_TOKEN = "8694739414:AAFWpNk2rKENyrYbEndh0eN1TuLdGaCZQYg"
+CHAT_ID = "6071049012"
+SBMS_IP = "192.168.1.186"
+
+DEVICE_ID = "bffcf32e83ea5301a7vu9j"
+LOCAL_KEY = "K$Izl;w{#U&$P$6S"
+IP_ADDRESS = "192.168.1.241"
+
+DEVICE_MAC = "f0:50:7d:7e:4b:80"
+ENCRYPTION_KEY = "2bd66038933d98e74c0ca53f5da5c5ab"
 
 # Global dictionary to capture the single decrypted packet data
 latest_mppt_data = {}
@@ -148,6 +154,41 @@ def get_sbms_data(ip_address):
     except Exception as e:
         return {"error": f"BMS SSE Parser error: {str(e)}"}
 
+
+# --- FANELITE DEHUMIDIFIER TELEMETRY FUNCTION ---
+def get_dehumidifier_status():
+    """Connects to Fanelite over LAN and extracts live environmental conditions."""
+    try:
+        # Connect directly to the appliance over local Wi-Fi
+        d = tinytuya.OutletDevice(DEVICE_ID, address=IP_ADDRESS, local_key=LOCAL_KEY)
+        d.set_version(3.4) 
+        
+        payload = d.status()
+        
+        if payload and 'dps' in payload:
+            current_humidity = payload['dps'].get('6')
+            is_on = payload['dps'].get('1')
+            
+            power_status = "ON" if is_on else "OFF"
+            return f"💧 Boat Humidity: {current_humidity}% (Dehumidifier: {power_status})\n"
+        else:
+            return "💧 Boat Humidity: <i>Error (Unable to parse data points)</i>\n"
+                        
+    except Exception:
+        return "💧 Boat Humidity: <i>Error (Device Unreachable)</i>\n"
+
+# --- PI ZERO TEMPERATURE
+def get_pi_cpu_temperature():
+    """Reads the Raspberry Pi internal CPU thermal sensor directly from the system zone."""
+    try:
+        with open("/sys/class/thermal/thermal_zone0/temp", "r") as f:
+            # The system returns the temp in millidegrees Celsius (e.g., 43500)
+            millidegrees = float(f.read().strip())
+            return round(millidegrees / 1000.0, 1)
+    except Exception as e:
+        # Fallback if the file path isn't readable
+        return None
+
 # --- TELEGRAM DISPATCH ---
 def send_telegram_update(token, chat_id, message):
     url = f"https://api.telegram.org/bot{token}/sendMessage"
@@ -167,7 +208,13 @@ async def main():
     # 2. Gather Victron data asynchronously from the BLE radio stream
     await get_solar_telemetry()
 
-    # 3. Build the unified text payload
+    # 3. Gather local Dehumidifier/Saloon Humidity telemetry
+    humidity_msg = get_dehumidifier_status()
+
+    # 4. Get P{i Zero temperature
+    pi_temp = get_pi_cpu_temperature()
+
+    # 5. Build the unified text payload
     if not metrics or metrics.get("error"):
         error_reason = (
             metrics["error"] if metrics else "Unknown critical parser failure."
@@ -182,7 +229,9 @@ async def main():
             "🔋 State of Charge: {}%\n"
             "⚡ Total Voltage: {} V\n"
             "{} Net Current: {} A\n"
-            "🌡️ BMS Temp: {} °C\n\n"
+            "🌡️ BMS Temp: {} °C\n"
+            "{}"  # <-- This is where your live humidity text seamlessly slides into place
+            "---------------------------------\n"
             "Individual Cell Levels:\n"
             "  ▪️ Cell 1: {} V\n"
             "  ▪️ Cell 2: {} V\n"
@@ -194,6 +243,7 @@ async def main():
                 direction,
                 metrics["net_current"],
                 metrics["temperature"],
+                humidity_msg,  # Inserts the cleanly formatted humidity string
                 metrics["cell_voltages"][0],
                 metrics["cell_voltages"][1],
                 metrics["cell_voltages"][2],
@@ -220,9 +270,16 @@ async def main():
             )
             alert_msg += victron_msg
         else:
-            alert_msg += "☀️ Solar Data: <i>Unavailable (BLE Timeout)</i>\n---------------------------------"
+            alert_msg += "☀️ Solar Data: <i>Unavailable (BLE Timeout)</i>\n---------------------------------\n"
 
-    # 4. Ship the combined report out to Telegram
+        # Append Pi Zero temperature
+        # If the Pi temperature reading is valid, add it cleanly to the string
+        if pi_temp is not None:
+            alert_msg += f"\n🧠 *Pi Zero Tmep: {pi_temp}°C\n"
+
+        alert_msg += f"-----------------------------------\n"
+
+    # 5. Ship the combined report out to Telegram
     send_telegram_update(BOT_TOKEN, CHAT_ID, alert_msg)
 
 
